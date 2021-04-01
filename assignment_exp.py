@@ -17,8 +17,7 @@ from collections import Counter
 from spacy.lang.en import English
 from assignment1_fns import *
 
-import llr
-from imblearn.over_sampling import RandomOverSampler, SMOTE, SMOTEN
+from experimental_features import *
 
 # Convenient for debugging but feel free to comment out
 #from traceback_with_variables import activate_by_import
@@ -89,13 +88,6 @@ def load_stopwords(filename):
 def split_training_set(lines, labels, test_size=0.3, random_seed=42):
     X_train, X_test, y_train, y_test = train_test_split(lines, labels, test_size=test_size,
         random_state=random_seed)
-
-    #ros = RandomOverSampler(random_state=42)
-    #x_over, y_over = ros.fit_resample(np.array(X_train, dtype=object).reshape([-1, 1]), np.array(y_train, dtype=object).reshape([-1, 1]))
-    #x_over, y_over = SMOTEN(random_state=42).fit_resample(np.array(X_train, dtype=object).reshape([-1, 1]), np.array(y_train, dtype=object).reshape([-1, 1]))
-
-    #X_train = [x[0] for x in x_over]
-    #y_train = [y for y in y_over]
 
     print("Training set label counts: {}".format(Counter(y_train)))
     print("Test set     label counts: {}".format(Counter(y_test)))
@@ -201,116 +193,18 @@ def most_informative_features(vectorizer, classifier, n=20):
 def whitespace_tokenizer(line):
     return line.split()
 
-def build_initial_features(X_train, X_test, filter_jargon):
-    stop_words = load_stopwords(stopwords_file)
-    if filter_jargon:
-        stop_words |= load_stopwords(stopwords_file_jargon)
-
-    # Roll your own feature extraction.
-    # Call convert_lines_to_feature_strings() to get your features
-    # as a whitespace-separated string that will now represent the document.
-    print("Creating feature strings for training data")
-    X_train_feature_strings = convert_lines_to_feature_strings(X_train, stop_words)
-    print("Creating feature strings for test data")
-    X_test_documents        = convert_lines_to_feature_strings(X_test, stop_words)
-
-    return X_train_feature_strings, X_test_documents, stop_words
-
-def do_llr_classification(x_train, x_test, y_train, y_test, stop_words, llr_factor=0):
-    if llr_factor > 0:
-        X_train_dem_feature_strings = [x_train[i] for i in range(0, len(x_train)) if y_train[i] == 'Democrat']
-        X_train_repub_feature_strings = [x_train[i] for i in range(0, len(x_train)) if y_train[i] == 'Republican']
-        dem_counter = Counter(' '.join(X_train_dem_feature_strings).split())
-        repub_counter = Counter(' '.join(X_train_repub_feature_strings).split())
-        cmp_results = llr.llr_compare(dem_counter, repub_counter)
-
-        top_n_dem = {k:v for k,v in sorted(cmp_results.items(), key=lambda x: -x[1])[:int(llr_factor)]}
-        #top_n_dem = {k:v for k,v in cmp_results.items() if v > 0}
-        #top_n_repub = {k:v for k,v in cmp_results.items() if v < 0}
-        top_n_repub = {k:v for k,v in sorted(cmp_results.items(), key=lambda x: x[1])[:int(llr_factor)]}
-
-        cur_train_features = [' '.join([w for w in x.split() if w in top_n_dem or w in top_n_repub]) for x in x_train]
-        cur_test_docs = [' '.join([w for w in x.split() if w in top_n_dem or w in top_n_repub]) for x in x_test]
-
-        # Call CountVectorizer with whitespace-based tokenization as the analyzer, so that it uses exactly your features,
-        # but without doing any of its own analysis/feature-extraction.
-        X_features_train, training_vectorizer = convert_text_into_features(cur_train_features, stop_words, whitespace_tokenizer)
-
-        # Create a logistic regression classifier trained on the featurized training data
-        lr_classifier = LogisticRegression(solver='liblinear', random_state=42)
-        lr_classifier.fit(X_features_train, y_train)
-
-        # # Show which features have the highest-value logistic regression coefficients
-        # print("Most informative features")
-        # most_informative_features(training_vectorizer, lr_classifier, num_most_informative)
-
-        # Apply the "vectorizer" created using the training data to the test documents, to create testset feature vectors
-        X_test_features =  training_vectorizer.transform(cur_test_docs)
-    else:
-        print('not using LLR')
-        # Call CountVectorizer with whitespace-based tokenization as the analyzer, so that it uses exactly your features,
-        # but without doing any of its own analysis/feature-extraction.
-        X_features_train, training_vectorizer = convert_text_into_features(x_train, stop_words, whitespace_tokenizer)
-
-        # Create a logistic regression classifier trained on the featurized training data
-        lr_classifier = LogisticRegression(solver='liblinear', random_state=42)
-        lr_classifier.fit(X_features_train, y_train)
-
-        # # Show which features have the highest-value logistic regression coefficients
-        # print("Most informative features")
-        # most_informative_features(training_vectorizer, lr_classifier, num_most_informative)
-
-        # Apply the "vectorizer" created using the training data to the test documents, to create testset feature vectors
-        X_test_features =  training_vectorizer.transform(x_test)
-
-
-    # Classify the test data and see how well you perform
-    # For various evaluation scores see https://scikit-learn.org/stable/modules/model_evaluation.html
-    print("Classifying test data")
-    #predicted_labels = lr_classifier.predict(X_test_features)
-    return lr_classifier.predict_proba(X_test_features)
-
-def alt_main(use_sklearn_feature_extraction, num_most_informative, plot_metrics, chamber='senate', filter_jargon=False, filter_by_llr=0):
-    X_train, X_test, y_train, y_test = split_training_set(*read_and_clean_lines(input_speechfile, chamber))
-
-    X_train_feature, X_test_feature, stop_words = build_initial_features(X_train, X_test, False)
-    X_train_feature_no_jargon, X_test_feature_no_jargon, stop_words_jargon = build_initial_features(X_train, X_test, True)
-
-    for llr_factor in range(750, 850, 3):
-        no_jarg_pred = do_llr_classification(X_train_feature, X_test_feature, y_train, y_test, stop_words, llr_factor).tolist()
-        jarg_pred = do_llr_classification(X_train_feature_no_jargon, X_test_feature_no_jargon, y_train, y_test, stop_words_jargon, llr_factor).tolist()
-        
-        predicted_labels = []
-        disagreements = 0
-        for i in range(len(no_jarg_pred)):
-            no_jarg_idx = no_jarg_pred[i].index(max(no_jarg_pred[i]))
-            jarg_idx = jarg_pred[i].index(max(jarg_pred[i]))
-
-            if no_jarg_idx == jarg_idx:
-                predicted_labels.append(['Democrat', 'Republican'][no_jarg_idx])
-            else:
-                disagreements += 1
-                if max(no_jarg_pred[i]) > max(jarg_pred[i]):
-                    predicted_labels.append(['Democrat', 'Republican'][no_jarg_idx])
-                else:
-                    predicted_labels.append(['Democrat', 'Republican'][jarg_idx])
-        
-        print(f'there were {disagreements} disagreements in classification')
-        accuracy = metrics.accuracy_score(predicted_labels,  y_test)
-        print(f"llr_factor={llr_factor}, accuracy={accuracy}")
-        #print('Accuracy  = {}'.format(metrics.accuracy_score(predicted_labels,  y_test)))
-        #if accuracy > 0.815:
-        for label in ['Republican', 'Democrat']:
-            print('Precision for label {} = {}'.format(label, metrics.precision_score(predicted_labels, y_test, pos_label=label)))
-            print('Recall    for label {} = {}'.format(label, metrics.recall_score(predicted_labels,    y_test, pos_label=label)))
-    
-def main(use_sklearn_feature_extraction, num_most_informative, plot_metrics, chamber='senate', filter_jargon=False, filter_by_llr=0):
+def main(use_sklearn_feature_extraction, num_most_informative, plot_metrics, chamber='senate', filter_jargon=False, filter_by_llr=0,
+    oversample=False):
     stop_words = load_stopwords(stopwords_file)
     if filter_jargon:
         stop_words |= load_stopwords(stopwords_file_jargon)
 
     # Read the dataset in and split it into training documents/labels (X) and test documents/labels (y)
     X_train, X_test, y_train, y_test = split_training_set(*read_and_clean_lines(input_speechfile, chamber))
+
+    # If oversampling was requested, do the oversampling before extracting features
+    if oversample:
+        X_train, y_train = SmoteOversampler().fit_resample(X_train, y_train)
 
     if use_sklearn_feature_extraction:
         # Use sklearn CountVectorizer's built-in tokenization to get unigrams and bigrams as features
@@ -324,37 +218,11 @@ def main(use_sklearn_feature_extraction, num_most_informative, plot_metrics, cha
         X_train_feature_strings = convert_lines_to_feature_strings(X_train, stop_words)
         print("Creating feature strings for test data")
         X_test_documents        = convert_lines_to_feature_strings(X_test, stop_words)
-        
+
         if filter_by_llr > 0:
-            X_train_dem_feature_strings = [X_train_feature_strings[i] for i in range(0, len(X_train_feature_strings)) if y_train[i] == 'Democrat']
-            X_train_repub_feature_strings = [X_train_feature_strings[i] for i in range(0, len(X_train_feature_strings)) if y_train[i] == 'Republican']
-            dem_counter = Counter(' '.join(X_train_dem_feature_strings).split())
-            repub_counter = Counter(' '.join(X_train_repub_feature_strings).split())
-            cmp_results = llr.llr_compare(dem_counter, repub_counter)
-
-            top_n_dem = {k:v for k,v in sorted(cmp_results.items(), key=lambda x: -x[1])[:filter_by_llr]}
-            top_n_repub = {k:v for k,v in sorted(cmp_results.items(), key=lambda x: x[1])[:filter_by_llr]}
-
-            tmp_x_features = []
-            for x in X_train_feature_strings:
-                cur_str = ' '.join([w for w in x.split() if w in top_n_dem or w in top_n_repub])
-                if len(cur_str.split()) < 20:
-                    cur_str = x
-                
-                tmp_x_features.append(cur_str)
-            X_train_feature_strings = tmp_x_features
-
-            tmp_x_features = []
-            for x in X_test_documents:
-                cur_str = ' '.join([w for w in x.split() if w in top_n_dem or w in top_n_repub])
-                if len(cur_str.split()) < 20:
-                    cur_str = x
-                
-                tmp_x_features.append(cur_str)
-            X_test_documents = tmp_x_features
-
-            #X_train_feature_strings = [' '.join([w for w in x.split() if w in top_n_dem or w in top_n_repub]) for x in X_train_feature_strings]
-            #X_test_documents = [' '.join([w for w in x.split() if w in top_n_dem or w in top_n_repub]) for x in X_test_documents]
+            llr = LlrReduction(X_train_feature_strings, y_train, X_test_documents)
+            X_train_feature_strings, X_test_documents = \
+                llr.reduce_features(filter_by_llr, 'Democrat', 'Republican', 20)
 
         # Call CountVectorizer with whitespace-based tokenization as the analyzer, so that it uses exactly your features,
         # but without doing any of its own analysis/feature-extraction.
@@ -396,4 +264,3 @@ if __name__ == "__main__":
     parser.add_argument('--filter-by-llr', default='0', type=int, help='Filter uni/bigrams by LLR importance (n most important)')
     args = parser.parse_args()
     main(args.use_sklearn_features, int(args.num_most_informative), args.plot_metrics, args.chamber, args.filter_jargon, args.filter_by_llr)
-    #alt_main(args.use_sklearn_features, int(args.num_most_informative), args.plot_metrics, args.chamber, args.filter_jargon, args.filter_by_llr)

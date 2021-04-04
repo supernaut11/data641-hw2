@@ -1,5 +1,5 @@
 from collections import Counter
-from imblearn.over_sampling import RandomOverSampler, SMOTEN
+from imblearn.over_sampling import RandomOverSampler, SMOTE
 import llr
 import numpy as np
 
@@ -8,11 +8,8 @@ class Oversampler:
         self._alg = algorithm
 
     def fit_resample(self, X_train, y_train):
-        X_over, y_over = self._alg.fit_resample(np.array(X_train, dtype=object).reshape([-1, 1]), 
-                                                np.array(y_train, dtype=object).reshape([-1, 1]))
+        X_over, y_over = self._alg.fit_resample(X_train, np.array(y_train, dtype=object).reshape([-1, 1]))
 
-        # X_over is actually an array of arrays, eliminate first level of indirection before returning
-        X_over = [x[0] for x in X_over]
         return X_over, y_over
 
 class RandomOversampler(Oversampler):
@@ -21,7 +18,7 @@ class RandomOversampler(Oversampler):
 
 class SmoteOversampler(Oversampler):
     def __init__(self, random_state=42):
-        super().__init__(SMOTEN(random_state=random_state))
+        super().__init__(SMOTE(random_state=random_state))
 
 class LlrReduction:
     def __init__(self, X_train, y_train, X_test):

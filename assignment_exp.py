@@ -17,7 +17,7 @@ from collections import Counter
 from spacy.lang.en import English
 from assignment1_fns import *
 
-from experimental_features import *
+from experimental_features import RandomOversampler, LlrReduction
 
 # Convenient for debugging but feel free to comment out
 #from traceback_with_variables import activate_by_import
@@ -28,6 +28,7 @@ stopwords_file     = "./mallet_en_stoplist.txt"
 stopwords_file_jargon = "./new_legis_proc_jargon_stopwords.txt"
 
 CLEANER_REGEX = re.compile(r'\s+')
+MINIMUM_LLR_THRESHOLD = 25
 
 # This is the similar to read_and_clean_lines in the previous assignment, but
 # rather than just returning a list of cleaned lines of text, we should return
@@ -66,32 +67,6 @@ def read_and_clean_lines(infile, chamber):
     print("Read {} documents".format(len(lines)))
     print("Read {} labels".format(len(parties)))
     return lines, parties
-
-# Read a set of stoplist words from filename, assuming it contains one word per line
-# Return a python Set data structure (https://www.w3schools.com/python/python_sets.asp)
-def load_stopwords(filename):
-    stopwords = []
-    with codecs.open(filename, 'r', encoding='ascii', errors='ignore') as fp:
-        stopwords = fp.read().split('\n')
-    return set(stopwords)
-
-
-# Call sklearn's train_test_split function to split the dataset into training items/labels
-# and test items/labels.  See https://realpython.com/train-test-split-python-data/
-# (or Google train_test_split) for how to make this call.
-#
-# Note that the train_test_split function returns four sequences: X_train, X_test, y_train, y_test
-# X_train and y_train  are the training items and labels, respectively
-# X_test  and y_test   are the test items and labels, respectively
-#
-# This function should return those four values
-def split_training_set(lines, labels, test_size=0.3, random_seed=42):
-    X_train, X_test, y_train, y_test = train_test_split(lines, labels, test_size=test_size,
-        random_state=random_seed)
-
-    print("Training set label counts: {}".format(Counter(y_train)))
-    print("Test set     label counts: {}".format(Counter(y_test)))
-    return X_train, X_test, y_train, y_test
 
 # Converting text into features.
 # Inputs:
@@ -193,56 +168,198 @@ def most_informative_features(vectorizer, classifier, n=20):
 def whitespace_tokenizer(line):
     return line.split()
 
-def main(use_sklearn_feature_extraction, num_most_informative, plot_metrics, chamber='senate', filter_jargon=False, filter_by_llr=0,
-    oversample=False):
-    stop_words = load_stopwords(stopwords_file)
-    if filter_jargon:
-        stop_words |= load_stopwords(stopwords_file_jargon)
+class FeatureExtraction:
+    def __init__(self):
+        self._X_train = []
+        self._X_test = []
+        self._y_train = []
+        self._y_test = []
+        self._X_train_tokens = []
+        self._X_test_tokens = []
+        self._stopwords = set()
 
-    # Read the dataset in and split it into training documents/labels (X) and test documents/labels (y)
-    X_train, X_test, y_train, y_test = split_training_set(*read_and_clean_lines(input_speechfile, chamber))
+    # Read a set of stoplist words from filename, assuming it contains one word per line
+    # Return a python Set data structure (https://www.w3schools.com/python/python_sets.asp)
+    def load_stopwords(self, filename):
+        stopwords = []
+        with codecs.open(filename, 'r', encoding='ascii', errors='ignore') as fp:
+            stopwords = fp.read().split('\n')
+        self._stopwords |= set(stopwords)
 
-    # If oversampling was requested, do the oversampling before extracting features
-    if oversample:
-        X_train, y_train = SmoteOversampler().fit_resample(X_train, y_train)
+        return self._stopwords
+    
+    def clear_stopwords(self):
+        self._stopwords = set()
+    
+    # Call sklearn's train_test_split function to split the dataset into training items/labels
+    # and test items/labels.  See https://realpython.com/train-test-split-python-data/
+    # (or Google train_test_split) for how to make this call.
+    #
+    # Note that the train_test_split function returns four sequences: X_train, X_test, y_train, y_test
+    # X_train and y_train  are the training items and labels, respectively
+    # X_test  and y_test   are the test items and labels, respectively
+    #
+    # This function should return those four values
+    def split_training_set(self, lines, labels, test_size=0.3, random_seed=42):
+        self._X_train, self._X_test, self._y_train, self._y_test = train_test_split(lines, labels, test_size=test_size,
+            random_state=random_seed)
 
-    if use_sklearn_feature_extraction:
-        # Use sklearn CountVectorizer's built-in tokenization to get unigrams and bigrams as features
-        X_features_train, training_vectorizer = convert_text_into_features(X_train, stop_words, "word", range=(1,2))
-        X_test_documents = X_test
-    else:
-        # Roll your own feature extraction.
-        # Call convert_lines_to_feature_strings() to get your features
-        # as a whitespace-separated string that will now represent the document.
+        print("Training set label counts: {}".format(Counter(self._y_train)))
+        print("Test set     label counts: {}".format(Counter(self._y_test)))
+        
+        return self._X_train, self._X_test, self._y_train, self._y_test
+
+    def tokenize_dataset(self):
         print("Creating feature strings for training data")
-        X_train_feature_strings = convert_lines_to_feature_strings(X_train, stop_words)
+        self._X_train_tokens = convert_lines_to_feature_strings(self._X_train, self._stopwords)
         print("Creating feature strings for test data")
-        X_test_documents        = convert_lines_to_feature_strings(X_test, stop_words)
+        self._X_test_tokens = convert_lines_to_feature_strings(self._X_test, self._stopwords)
 
-        if filter_by_llr > 0:
-            llr = LlrReduction(X_train_feature_strings, y_train, X_test_documents)
+    def _extract_features_sklearn(self):
+        # Use sklearn CountVectorizer's built-in tokenization to get unigrams and bigrams as features
+        X_features_train, training_vectorizer = convert_text_into_features(self._X_train, self._stopwords, "word", range=(1,2))
+        
+        return X_features_train, training_vectorizer, self._X_test
+
+    def _extract_features_homebrew(self, llr_factor):
+        X_train_feature_strings = self._X_train_tokens
+        X_test_documents = self._X_test_tokens
+
+        if llr_factor > 0:
+            llr = LlrReduction(X_train_feature_strings, self._y_train, X_test_documents)
             X_train_feature_strings, X_test_documents = \
-                llr.reduce_features(filter_by_llr, 'Democrat', 'Republican', 20)
+                llr.reduce_features(llr_factor, 'Democrat', 'Republican', MINIMUM_LLR_THRESHOLD)
 
         # Call CountVectorizer with whitespace-based tokenization as the analyzer, so that it uses exactly your features,
         # but without doing any of its own analysis/feature-extraction.
-        X_features_train, training_vectorizer = convert_text_into_features(X_train_feature_strings, stop_words, whitespace_tokenizer)
+        X_features_train, training_vectorizer = convert_text_into_features(X_train_feature_strings, self._stopwords, whitespace_tokenizer)
+
+        return X_features_train, training_vectorizer, X_test_documents
+
+    def extract_features(self, llr_factor=0, use_sklearn=False):
+        if not use_sklearn:
+            return self._extract_features_homebrew(llr_factor)
+        else:
+            return self._extract_features_sklearn()
+
+    def get_labels(self):
+        return self._y_train, self._y_test
+
+def prep_feature_extraction(chamber, filter_jargon):
+    extractor = FeatureExtraction()
+
+    extractor.load_stopwords(stopwords_file)
+    if filter_jargon:
+        extractor.load_stopwords(stopwords_file_jargon)
+
+    # Read the dataset in and split it into training documents/labels (X) and test documents/labels (y)
+    extractor.split_training_set(*read_and_clean_lines(input_speechfile, chamber))
+
+    return extractor
+
+class LogisticRegressionClassifier:
+    def __init__(self):
+        self._classifier = LogisticRegression(solver='liblinear', random_state=42)
+        self._vectorizer = None
+
+    def set_vectorizer(self, vectorizer):
+        self._vectorizer = vectorizer
+
+    def train(self, train, train_labels):
+        self._classifier.fit(train, train_labels)
+
+    def get_vectorized(self, data):
+        return self._vectorizer.transform(data)
+
+    def classify(self, test):
+        # Apply the "vectorizer" created using the training data to the test documents, to create testset feature vectors
+        X_test_features =  self._vectorizer.transform(test)
+
+        # Classify the test data and see how well you perform
+        # For various evaluation scores see https://scikit-learn.org/stable/modules/model_evaluation.html
+        return self._classifier.predict(X_test_features)
+    
+    @property
+    def classifier(self):
+        return self._classifier
+
+class LlrExperiment:
+    def __init__(self, chamber, filter_jargon, oversample, output_handle):
+        self._chamber = chamber
+        self._filter_jargon = filter_jargon
+        self._oversample = oversample
+        self._output = output_handle
+
+    def execute(self, llr_range):
+        extractor = prep_feature_extraction(self._chamber, self._filter_jargon)
+
+        y_train, y_test = extractor.get_labels()
+        extractor.tokenize_dataset()
+
+        lr_classifier = LogisticRegressionClassifier()
+
+        self._output.write(','.join(['llr_value', 'accuracy', 'dem_precis', 'dem_recall', 'repub_precis', 'repub_recall']) + '\n')
+
+        for i in llr_range:
+            X_features_train, training_vectorizer, X_test_documents = extractor.extract_features(llr_factor=i)
+
+                # If oversampling was requested, do the oversampling before classifying
+            if self._oversample:
+                X_features_train, y_train = RandomOversampler().fit_resample(X_features_train, y_train)
+
+            # Create a logistic regression classifier trained on the featurized training data
+            lr_classifier.set_vectorizer(training_vectorizer)
+            lr_classifier.train(X_features_train, y_train)
+
+            # Classify the test data and see how well you perform
+            # For various evaluation scores see https://scikit-learn.org/stable/modules/model_evaluation.html
+            print(f"Classifying test data for LLR factor = {i}")
+            predicted_labels = lr_classifier.classify(X_test_documents)
+            accuracy = metrics.accuracy_score(predicted_labels,  y_test)
+            print(f'Accuracy  = {accuracy}')
+            r_precision = metrics.precision_score(predicted_labels, y_test, pos_label='Republican')
+            r_recall = metrics.recall_score(predicted_labels,    y_test, pos_label='Republican')
+            d_precision = metrics.precision_score(predicted_labels, y_test, pos_label='Democrat')
+            d_recall = metrics.recall_score(predicted_labels,    y_test, pos_label='Democrat')
+
+            print(f'Precision for Republican = {r_precision}')
+            print(f'Recall    for Republican = {r_recall}')
+            print(f'Precision for Democrat   = {d_precision}')
+            print(f'Recall    for Democrat   = {d_recall}')
+
+            self._output.write(f'{i},{accuracy},{d_precision},{d_recall},{r_precision},{r_recall}\n')
+
+def main(use_sklearn_feature_extraction, num_most_informative, plot_metrics, chamber='senate', filter_jargon=False, filter_by_llr=0,
+    oversample=False):
+    extractor = prep_feature_extraction(chamber, filter_jargon)
+    y_train, y_test = extractor.get_labels()
+
+    if use_sklearn_feature_extraction:
+        # Use sklearn CountVectorizer's built-in tokenization to get unigrams and bigrams as features
+        X_features_train, training_vectorizer, X_test_documents = extractor.extract_features(use_sklearn=True)
+    else:
+        # Call CountVectorizer with whitespace-based tokenization as the analyzer, so that it uses exactly your features,
+        # but without doing any of its own analysis/feature-extraction.
+        extractor.tokenize_dataset()
+        X_features_train, training_vectorizer, X_test_documents = extractor.extract_features(llr_factor=filter_by_llr)
+
+    # If oversampling was requested, do the oversampling before classifying
+    if oversample:
+        X_features_train, y_train = RandomOversampler().fit_resample(X_features_train, y_train)
 
     # Create a logistic regression classifier trained on the featurized training data
-    lr_classifier = LogisticRegression(solver='liblinear', random_state=42)
-    lr_classifier.fit(X_features_train, y_train)
+    lr_classifier = LogisticRegressionClassifier()
+    lr_classifier.set_vectorizer(training_vectorizer)
+    lr_classifier.train(X_features_train, y_train)
 
     # Show which features have the highest-value logistic regression coefficients
     print("Most informative features")
-    most_informative_features(training_vectorizer, lr_classifier, num_most_informative)
-
-    # Apply the "vectorizer" created using the training data to the test documents, to create testset feature vectors
-    X_test_features =  training_vectorizer.transform(X_test_documents)
+    most_informative_features(training_vectorizer, lr_classifier.classifier, num_most_informative)
 
     # Classify the test data and see how well you perform
     # For various evaluation scores see https://scikit-learn.org/stable/modules/model_evaluation.html
     print("Classifying test data")
-    predicted_labels = lr_classifier.predict(X_test_features)
+    predicted_labels = lr_classifier.classify(X_test_documents)
     print('Accuracy  = {}'.format(metrics.accuracy_score(predicted_labels,  y_test)))
     for label in ['Republican', 'Democrat']:
         print('Precision for label {} = {}'.format(label, metrics.precision_score(predicted_labels, y_test, pos_label=label)))
@@ -250,9 +367,11 @@ def main(use_sklearn_feature_extraction, num_most_informative, plot_metrics, cha
     
     if plot_metrics:
         print("Generating plots")
-        metrics.plot_confusion_matrix(lr_classifier, X_test_features, y_test, normalize='true')
-        metrics.plot_roc_curve(lr_classifier, X_test_features, y_test)
+        metrics.plot_confusion_matrix(lr_classifier.classifier, lr_classifier.get_vectorized(X_test_documents), y_test, normalize='true')
+        plt.savefig('conf_matrix.png')
+        metrics.plot_roc_curve(lr_classifier.classifier, lr_classifier.get_vectorized(X_test_documents), y_test)
         plt.show()
+        plt.savefig('roc.png')
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Options for running this script')
@@ -262,5 +381,6 @@ if __name__ == "__main__":
     parser.add_argument('--chamber', default='senate', type=lambda arg: arg.lower(), choices=['senate', 'house', 'both'], help='Chambers of Congress to include')
     parser.add_argument('--filter-jargon', default=False, action='store_true', help='Filter procedural jargon via stopwords')
     parser.add_argument('--filter-by-llr', default='0', type=int, help='Filter uni/bigrams by LLR importance (n most important)')
+    parser.add_argument('--oversample', default=False, action='store_true', help='Oversample minority party samples')
     args = parser.parse_args()
-    main(args.use_sklearn_features, int(args.num_most_informative), args.plot_metrics, args.chamber, args.filter_jargon, args.filter_by_llr)
+    main(args.use_sklearn_features, int(args.num_most_informative), args.plot_metrics, args.chamber, args.filter_jargon, args.filter_by_llr, args.oversample)

@@ -30,23 +30,9 @@ def filter_punctuation_bigrams(ngrams):
     punct = string.punctuation
     return [ngram   for ngram in ngrams   if ngram[0] not in punct and ngram[1] not in punct]
 
-def filter_punctuation_trigrams(ngrams):
-    # Input: assume ngrams is a list of ['token1','token2'] bigrams
-    # Removes ngrams like ['today','.'] where either token is a punctuation character
-    # Returns list with the items that were not removed
-    punct = string.punctuation
-    return [ngram   for ngram in ngrams   if ngram[0] not in punct and ngram[1] not in punct and ngram[2] not in punct]
-
 def filter_stopword_bigrams(ngrams, stopwords):
     # Input: assume ngrams is a list of ['token1','token2'] bigrams, stopwords is a set of words like 'the'
     # Removes ngrams like ['in','the'] and ['senator','from'] where either word is a stopword
     # Returns list with the items that were not removed
     result = [ngram   for ngram in ngrams   if ngram[0] not in stopwords and ngram[1] not in stopwords]
-    return result
-
-def filter_stopword_trigrams(ngrams, stopwords):
-    # Input: assume ngrams is a list of ['token1','token2'] bigrams, stopwords is a set of words like 'the'
-    # Removes ngrams like ['in','the'] and ['senator','from'] where either word is a stopword
-    # Returns list with the items that were not removed
-    result = [ngram   for ngram in ngrams   if ngram[0] not in stopwords and ngram[1] not in stopwords and ngram[2] not in stopwords]
     return result

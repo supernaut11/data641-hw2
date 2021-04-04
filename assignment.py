@@ -17,8 +17,6 @@ from collections import Counter
 from spacy.lang.en import English
 from assignment1_fns import *
 
-import llr
-
 # Convenient for debugging but feel free to comment out
 from traceback_with_variables import activate_by_import
 
@@ -189,10 +187,8 @@ def most_informative_features(vectorizer, classifier, n=20):
 def whitespace_tokenizer(line):
     return line.split()
         
-def main(use_sklearn_feature_extraction, num_most_informative, plot_metrics, chamber='senate', filter_jargon=False, filter_by_llr=0):
+def main(use_sklearn_feature_extraction, num_most_informative, plot_metrics, chamber='senate'):
     stop_words = load_stopwords(stopwords_file)
-    if filter_jargon:
-        stop_words |= load_stopwords(stopwords_file_jargon)
 
     # Read the dataset in and split it into training documents/labels (X) and test documents/labels (y)
     X_train, X_test, y_train, y_test = split_training_set(*read_and_clean_lines(input_speechfile, chamber))
@@ -210,21 +206,6 @@ def main(use_sklearn_feature_extraction, num_most_informative, plot_metrics, cha
         print("Creating feature strings for test data")
         X_test_documents        = convert_lines_to_feature_strings(X_test, stop_words)
         
-        if filter_by_llr > 0:
-            X_train_dem_feature_strings = [X_train_feature_strings[i] for i in range(0, len(X_train_feature_strings)) if y_train[i] == 'Democrat']
-            X_train_repub_feature_strings = [X_train_feature_strings[i] for i in range(0, len(X_train_feature_strings)) if y_train[i] == 'Republican']
-            dem_counter = Counter(' '.join(X_train_dem_feature_strings).split())
-            repub_counter = Counter(' '.join(X_train_repub_feature_strings).split())
-            cmp_results = llr.llr_compare(dem_counter, repub_counter)
-
-            top_n_dem = {k:v for k,v in sorted(cmp_results.items(), key=lambda x: -x[1])[:filter_by_llr]}
-            #top_n_dem = {}
-            #top_n_repub = {}
-            top_n_repub = {k:v for k,v in sorted(cmp_results.items(), key=lambda x: x[1])[:filter_by_llr]}
-
-            X_train_feature_strings = [' '.join([w for w in x.split() if w in top_n_dem or w in top_n_repub]) for x in X_train_feature_strings]
-            X_test_documents = [' '.join([w for w in x.split() if w in top_n_dem or w in top_n_repub]) for x in X_test_documents]
-
         # Call CountVectorizer with whitespace-based tokenization as the analyzer, so that it uses exactly your features,
         # but without doing any of its own analysis/feature-extraction.
         X_features_train, training_vectorizer = convert_text_into_features(X_train_feature_strings, stop_words, whitespace_tokenizer)
@@ -255,32 +236,11 @@ def main(use_sklearn_feature_extraction, num_most_informative, plot_metrics, cha
         metrics.plot_roc_curve(lr_classifier, X_test_features, y_test)
         plt.show()
 
-# def get_llr_top_n(n, chamber='senate', filter_jargon=False):
-#     stop_words = load_stopwords(stopwords_file)
-#     if filter_jargon:
-#         stop_words |= load_stopwords(stopwords_file_jargon)
-
-#     X_train, _, y_train, _ = split_training_set(*read_and_clean_lines(input_speechfile, chamber.lower()))
-#     X_train_dem = [X_train[i] for i in range(0,len(X_train)) if y_train[i] == 'Democrat']
-#     X_train_repub = [X_train[i] for i in range(0,len(X_train)) if y_train[i] == 'Republican']
-#     X_train_dem_feature_strings = convert_lines_to_feature_strings(X_train_dem, stop_words)
-#     X_train_repub_feature_strings = convert_lines_to_feature_strings(X_train_repub, stop_words)
-#     dem_counter = Counter(' '.join(X_train_dem_feature_strings).split())
-#     repub_counter = Counter(' '.join(X_train_repub_feature_strings).split())
-#     cmp_results = llr.llr_compare(dem_counter, repub_counter)
-
-#     top_n_dem = [(k,v) for k,v in sorted(cmp_results.items(), key=lambda x: -x[1])[:n]]
-#     top_n_repub = [(k,v) for k,v in sorted(cmp_results.items(), key=lambda x: x[1])[:n]]
-
-#     return top_n_dem, top_n_repub
-
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Options for running this script')
     parser.add_argument('--use_sklearn_features', default=False, action='store_true', help="Use sklearn's feature extraction")
     parser.add_argument('--plot_metrics', default=False, action='store_true', help="Generate figures for evaluation")
     parser.add_argument('--num_most_informative', default=10, action='store', help="Number of most-informative features to show")
     parser.add_argument('--chamber', default='senate', type=lambda arg: arg.lower(), choices=['senate', 'house', 'both'], help='Chambers of Congress to include')
-    parser.add_argument('--filter-jargon', default=False, action='store_true', help='Filter procedural jargon via stopwords')
-    parser.add_argument('--filter-by-llr', default='0', type=int, help='Filter uni/bigrams by LLR importance (n most important)')
     args = parser.parse_args()
-    main(args.use_sklearn_features, int(args.num_most_informative), args.plot_metrics, args.chamber, args.filter_jargon, args.filter_by_llr)
+    main(args.use_sklearn_features, int(args.num_most_informative), args.plot_metrics, args.chamber)
